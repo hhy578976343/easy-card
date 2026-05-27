@@ -4,6 +4,7 @@
 
 from enum import Enum
 from typing import List, Tuple, Optional
+import random
 
 
 class Suit(Enum):
@@ -44,6 +45,17 @@ class Card:
     def value(self) -> int:
         """卡牌的实际价值（用于排序和比较）"""
         return self.rank.value
+    
+    @property
+    def score(self) -> int:
+        """卡牌的分值（用于结算）"""
+        score_map = {
+            Rank.THREE: 3, Rank.FOUR: 4, Rank.FIVE: 5, Rank.SIX: 6,
+            Rank.SEVEN: 7, Rank.EIGHT: 8, Rank.NINE: 9, Rank.TEN: 10,
+            Rank.JACK: 11, Rank.QUEEN: 12, Rank.KING: 13, Rank.ACE: 14,
+            Rank.TWO: 15, Rank.LITTLE_JOKER: 20, Rank.BIG_JOKER: 30
+        }
+        return score_map.get(self.rank, 0)
     
     @property
     def suit_symbol(self) -> str:
@@ -102,9 +114,31 @@ class CardUtils:
         return cards
     
     @staticmethod
+    def shuffle_deck(cards: List[Card]) -> List[Card]:
+        """高质量洗牌 - Fisher-Yates算法 + 多次切牌"""
+        deck = cards.copy()
+        
+        # Fisher-Yates 洗牌
+        for i in range(len(deck) - 1, 0, -1):
+            j = random.randint(0, i)
+            deck[i], deck[j] = deck[j], deck[i]
+        
+        # 多次切牌操作增加随机性
+        for _ in range(random.randint(3, 7)):
+            cut_pos = random.randint(10, len(deck) - 10)
+            deck = deck[cut_pos:] + deck[:cut_pos]
+        
+        return deck
+    
+    @staticmethod
     def sort_cards(cards: List[Card], descending: bool = True) -> List[Card]:
         """排序卡牌，默认按值降序"""
         return sorted(cards, key=lambda c: c.value, reverse=descending)
+    
+    @staticmethod
+    def sort_cards_by_suit(cards: List[Card]) -> List[Card]:
+        """按花色和牌值排序"""
+        return sorted(cards, key=lambda c: (c.suit.value, c.value), reverse=True)
     
     @staticmethod
     def group_by_rank(cards: List[Card]) -> dict:

@@ -3,9 +3,9 @@
 """
 
 import random
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .cards import Card, CardUtils, Suit, Rank
 from .game_types import CardType, CardPattern, PatternAnalyzer
@@ -13,7 +13,7 @@ from .game_types import CardType, CardPattern, PatternAnalyzer
 
 class PlayerPosition(Enum):
     """玩家位置"""
-    LANDLORD = 0      # 地主
+    LANDLORD_POS = 0      # 地主位置
     PEASANT1 = 1      # 农民1
     PEASANT2 = 2      # 农民2
 
@@ -21,9 +21,11 @@ class PlayerPosition(Enum):
 @dataclass
 class Player:
     """玩家数据"""
+    player_id: int  # 玩家ID (0, 1, 2)
     position: PlayerPosition
     cards: List[Card] = None
     is_landlord: bool = False
+    round_score: int = 0  # 本轮积分变化
     
     def __post_init__(self):
         if self.cards is None:
@@ -31,9 +33,9 @@ class Player:
     
     @property
     def name(self) -> str:
-        if self.is_landlord:
-            return f"{self.position.name}(地主)"
-        return self.position.name
+        if self.player_id == 1:
+            return "你" if not self.is_landlord else "你(地主)"
+        return "电脑1" if self.player_id == 0 else "电脑2"
     
     def add_cards(self, cards: List[Card]):
         """添加卡牌"""
@@ -77,28 +79,44 @@ class LandlordsGame:
         self.players: List[Player] = []
         self.landlord_cards: List[Card] = []  # 底牌
         self.current_landlord: Optional[Player] = None
+        self.current_landlord_id: int = -1
         self.current_turn: int = 0  # 当前出牌轮次 (0, 1, 2)
         self.last_play: Optional[TurnResult] = None  # 上一次出牌
         self.turn_pass_count: int = 0  # 连续过牌次数
         self.round_number: int = 0  # 回合数
         
+        # 计分相关
+        self.landlord_bid: int = 1  # 叫地主分数
+        self.bombs_count: int = 0  # 本局炸弹数
+        self.rockets_count: int = 0  # 本局王炸数
+        self.is_spring: bool = False  # 是否春天
+        self.play_history: List[List[Card]] = []  # 出牌历史（用于统计炸弹）
+        self.first_play_by: int = -1  # 本回合第一个出牌的人
+        
     def initialize(self):
         """初始化游戏"""
         self.players = [
-            Player(PlayerPosition.PEASANT1),
-            Player(PlayerPosition.LANDLORD),
-            Player(PlayerPosition.PEASANT2)
+            Player(0, PlayerPosition.PEASANT1),
+            Player(1, PlayerPosition.LANDLORD_POS),
+            Player(2, PlayerPosition.PEASANT2)
         ]
         self.landlord_cards = []
         self.current_landlord = None
+        self.current_landlord_id = -1
         self.last_play = None
         self.turn_pass_count = 0
         self.round_number = 0
+        self.landlord_bid = 1
+        self.bombs_count = 0
+        self.rockets_count = 0
+        self.is_spring = False
+        self.play_history = []
+        self.first_play_by = -1
     
     def deal_cards(self) -> Tuple[List[Player], List[Card]]:
-        """发牌"""
+        """发牌 - 使用高质量随机洗牌"""
         deck = CardUtils.create_standard_deck()
-        random.shuffle(deck)
+        deck = CardUtils.shuffle_deck(deck)  # 使用改进的洗牌算法
         
         # 每人17张
         for i in range(3):
@@ -109,13 +127,19 @@ class LandlordsGame:
         
         return self.players, self.landlord_cards
     
-    def set_landlord(self, winner_idx: int):
+    def set_landlord(self, winner_idx: int, bid: int = 1):
         """设置地主"""
         self.current_landlord = self.players[winner_idx]
+        self.current_landlord_id = winner_idx
         self.players[winner_idx].is_landlord = True
+        self.landlord_bid = bid
         self.current_landlord.add_cards(self.landlord_cards)
         # 确定出牌顺序：地主先出
         self.current_turn = winner_idx
+        
+        # 检查是否春天（地主叫完地主后农民都不出）
+        # 这个在出牌过程中判断
+        self.first_play_by = winner_idx
     
     def get_player_at_turn(self, turn: int) -> Player:
         """获取指定回合的玩家"""
@@ -161,11 +185,34 @@ class LandlordsGame:
         
         result = TurnResult(player, GameAction.PLAY, cards, pattern)
         
+        # 记录出牌历史用于计分
+        self.play_history.append(cards)
+        
+        # 统计炸弹和王炸
+        self._check_bomb_or_rocket(cards)
+        
         # 更新状态
         self.last_play = result
         self.turn_pass_count = 0
         
+        # 如果是本回合第一次出牌
+        if self.first_play_by == -1:
+            self.first_play_by = player.player_id
+        
         return result
+    
+    def _check_bomb_or_rocket(self, cards: List[Card]):
+        """检查是否是炸弹或王炸"""
+        if len(cards) == 4:
+            # 检查是否是炸弹（四张相同）
+            values = [c.value for c in cards]
+            if len(set(values)) == 1:
+                self.bombs_count += 1
+        elif len(cards) == 2:
+            # 检查是否是王炸
+            values = [c.value for c in cards]
+            if 16 in values and 17 in values:
+                self.rockets_count += 1
     
     def pass_turn(self, player: Player) -> TurnResult:
         """玩家跳过"""
@@ -178,13 +225,13 @@ class LandlordsGame:
     
     def next_turn(self) -> int:
         """进入下一回合"""
-        self.current_turn = (self.current_turn + 1) % 3
-        
         # 如果连续两人跳过（上家出牌后），恢复自由出牌
-        # 注意：不需要等三人，跳过两次且上次有出牌即可
         if self.turn_pass_count >= 2 and self.last_play and self.last_play.action == GameAction.PLAY:
             self.last_play = None
             self.turn_pass_count = 0
+            self.first_play_by = -1  # 重置本回合第一个出牌者
+        
+        self.current_turn = (self.current_turn + 1) % 3
         
         return self.current_turn
     
@@ -205,6 +252,47 @@ class LandlordsGame:
             # 农民获胜 - 返回第一个农民
             return self.players[1] if not winner.is_landlord else self.players[2]
         return None
+    
+    def get_winner_id(self) -> int:
+        """获取获胜者ID"""
+        winner = self.get_winner()
+        return winner.player_id if winner else -1
+    
+    def is_landlord_winner(self) -> bool:
+        """判断地主是否获胜"""
+        winner_id = self.get_winner_id()
+        return winner_id == self.current_landlord_id
+    
+    def calculate_round_score(self) -> Dict:
+        """计算本轮积分"""
+        from .score import GameScore
+        
+        landlord_win = self.is_landlord_winner()
+        multiplier = 2 ** self.bombs_count * 4 ** self.rockets_count
+        
+        if self.is_spring:
+            multiplier *= 2
+        
+        base_score = self.landlord_bid * multiplier
+        
+        if landlord_win:
+            landlord_change = base_score * 2
+            peasant_change = -base_score
+        else:
+            landlord_change = -base_score * 2
+            peasant_change = base_score
+        
+        return {
+            'landlord_win': landlord_win,
+            'landlord_change': landlord_change,
+            'peasants_change': peasant_change,
+            'multiplier': multiplier,
+            'base_score': base_score,
+            'bombs': self.bombs_count,
+            'rockets': self.rockets_count,
+            'is_spring': self.is_spring,
+            'landlord_bid': self.landlord_bid
+        }
     
     def get_valid_plays(self, player: Player) -> List[List[Card]]:
         """获取玩家可以出的所有合法牌型组合"""
