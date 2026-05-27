@@ -123,10 +123,16 @@ class LandlordsGame:
     
     def can_play_cards(self, player: Player, cards: List[Card]) -> bool:
         """检查玩家是否能出这些牌"""
-        # 检查玩家是否有这些牌
-        player_card_values = [c.value for c in player.cards]
+        # 检查玩家是否有这些牌（更严格的检查）
+        player_cards_copy = player.cards.copy()
         for card in cards:
-            if card.value not in player_card_values:
+            found = False
+            for i, c in enumerate(player_cards_copy):
+                if c.value == card.value and c.suit == card.suit:
+                    player_cards_copy.pop(i)
+                    found = True
+                    break
+            if not found:
                 return False
         
         # 分析牌型
@@ -174,7 +180,8 @@ class LandlordsGame:
         """进入下一回合"""
         self.current_turn = (self.current_turn + 1) % 3
         
-        # 如果连续三人跳过，恢复自由出牌
+        # 如果连续两人跳过（上家出牌后），恢复自由出牌
+        # 注意：不需要等三人，跳过两次且上次有出牌即可
         if self.turn_pass_count >= 2 and self.last_play and self.last_play.action == GameAction.PLAY:
             self.last_play = None
             self.turn_pass_count = 0
@@ -224,8 +231,8 @@ class LandlordsGame:
     
     def get_smart_play(self, player: Player, is_ai: bool = True) -> Optional[List[Card]]:
         """AI智能出牌"""
-        if not self.last_play or self.last_play.player != player:
-            # 可以自由出牌
+        # 自由出牌（没有上家出牌或连续跳过后）
+        if not self.last_play or self.last_play.player == player or self.last_play.action == GameAction.PASS:
             return self._ai_first_play(player)
         else:
             # 跟牌
@@ -292,6 +299,7 @@ class LandlordsGame:
         if player_pattern:
             return player_pattern
         
+        # 找不到能打过的牌，尝试出最小单张（自由出牌）
         return None
     
     def _find_smallest_straight(self, cards: List[Card], length: int) -> Optional[List[Card]]:
